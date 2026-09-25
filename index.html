@@ -366,7 +366,16 @@ async function connect() {
   try {
     port = await navigator.serial.requestPort();
     await port.open({ baudRate: parseInt($("baud").value, 10), bufferSize: 1 << 16 });
-  } catch (e) { logLine("Connect failed: " + e.message); port = null; return; }
+  } catch (e) { logLine("Connect failed: " + e.message + " (close Arduino Serial Monitor / logger / other tabs using this port)"); port = null; return; }
+  logLine("Port opened. Resetting board...");
+  // Release the ESP32 auto-reset lines (DTR/RTS) so the chip is not held in reset or boot mode,
+  // then pulse EN to restart the firmware so its status lines appear.
+  try {
+    await port.setSignals({ dataTerminalReady: false, requestToSend: true });
+    await new Promise(r => setTimeout(r, 120));
+    await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+  } catch (e) { logLine("Could not set DTR/RTS: " + e.message); }
+  setTimeout(() => { if (port && rateCount === 0 && buf.t.length === 0) logLine("No data yet. Check: UART USB port, 921600 baud, press the board's RST button."); }, 3000);
   $("conn").textContent = "Connected"; $("dot").className = "dot on";
   ["disconnect", "calib", "tare", "record"].forEach(id => $(id).disabled = false);
   $("connect").disabled = true;
