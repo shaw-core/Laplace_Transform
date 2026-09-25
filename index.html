@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Balance Platform Live</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1c2024; --muted: #5f6770; --line: #dde1e6;
+  --roll: #2563eb; --pitch: #ea7a12; --onset: #d62828;
+  --lab1: rgba(46,160,67,0.13); --lab2: rgba(214,40,40,0.18); --lab3: rgba(234,179,8,0.18);
+  --left: #2563eb; --right: #ea7a12; --btn: #1c2024; --btn-ink: #ffffff; --ok: #16a34a; --warn: #d62828;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --panel: #1a1e23; --ink: #e8eaed; --muted: #9aa3ad; --line: #2c3238;
+    --roll: #60a5fa; --pitch: #fb923c; --onset: #f87171;
+    --lab1: rgba(74,222,128,0.12); --lab2: rgba(248,113,113,0.2); --lab3: rgba(250,204,21,0.16);
+    --left: #60a5fa; --right: #fb923c; --btn: #e8eaed; --btn-ink: #111418; --ok: #4ade80; --warn: #f87171;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+  display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+h1 { font-size: 17px; margin: 0 12px 0 0; }
+button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+  padding: 6px 12px; border-radius: 7px; cursor: pointer; }
+button.primary { background: var(--btn); color: var(--btn-ink); border-color: var(--btn); }
+button:disabled { opacity: .45; cursor: default; }
+button.active { outline: 2px solid var(--roll); }
+select, input { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 4px 6px; }
+.status { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--muted); margin-right: 5px; }
+.dot.on { background: var(--ok); } .dot.rec { background: var(--warn); }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px 20px; }
+@media (max-width: 960px) { main { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.plots { display: grid; gap: 10px; }
+.plot-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.plot-head b { font-size: 13px; }
+.plot-head span { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+canvas { width: 100%; height: 170px; display: block; }
+.legend { display: flex; gap: 14px; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+.sw { display: inline-block; width: 12px; height: 3px; vertical-align: middle; margin-right: 5px; }
+.sb { display: inline-block; width: 12px; height: 10px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+aside { display: grid; gap: 14px; align-content: start; }
+h2 { font-size: 14px; margin: 0 0 8px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.labels button { min-width: 0; flex: 1; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 3px 4px; border-bottom: 1px solid var(--line); }
+th:first-child, td:first-child { text-align: left; }
+.tablewrap { max-height: 190px; overflow: auto; }
+.muted { color: var(--muted); font-size: 12px; }
+#log { font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; color: var(--muted); max-height: 90px; overflow: auto; white-space: pre-wrap; }
+.warnbox { border: 1px solid var(--warn); color: var(--warn); border-radius: 8px; padding: 8px 10px; margin: 12px 20px 0; display: none; }
+kbd { border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Balance Platform — Live IMU</h1>
+  <button id="connect" class="primary">Connect ESP32-S3</button>
+  <button id="disconnect" disabled>Disconnect</button>
+  <label class="muted">Baud <select id="baud"><option>921600</option><option>115200</option></select></label>
+  <button id="calib" disabled title="Keep all IMUs still">Calibrate gyro (2 s)</button>
+  <button id="tare" disabled title="Set current tilt as zero">Zero tilt</button>
+  <button id="record" disabled>Start recording</button>
+  <div class="status">
+    <span><span id="dot" class="dot"></span><span id="conn">Not connected</span></span>
+    <span id="rate">0 Hz</span>
+    <span id="dropped">dropped 0</span>
+    <span id="recinfo"></span>
+  </div>
+</header>
+<div id="unsupported" class="warnbox">This browser has no Web Serial support. Open this page in desktop Chrome or Edge.</div>
+
+<main>
+  <section class="card">
+    <div class="row legend">
+      <span><span class="sw" style="background:var(--roll)"></span>roll (about x)</span>
+      <span><span class="sw" style="background:var(--pitch)"></span>pitch (about y)</span>
+      <span><span class="sb" style="background:var(--lab1)"></span>balanced</span>
+      <span><span class="sb" style="background:var(--lab2)"></span>perturbation</span>
+      <span><span class="sb" style="background:var(--lab3)"></span>recovery</span>
+      <span><span class="sw" style="background:var(--onset)"></span>perturbation onset</span>
+    </div>
+    <div class="plots" id="plots"></div>
+  </section>
+
+  <aside>
+    <div class="card">
+      <h2>Label <span class="muted">(keys <kbd>0</kbd>–<kbd>3</kbd>)</span></h2>
+      <div class="row labels">
+        <button data-label="0">0 none</button>
+        <button data-label="1">1 balanced</button>
+        <button data-label="2">2 perturb</button>
+        <button data-label="3">3 recover</button>
+      </div>
+      <div class="muted">Press <kbd>2</kbd> at the moment of each perturbation; onsets drive the metrics below.</div>
+    </div>
+
+    <div class="card">
+      <h2>Setup</h2>
+      <div class="row">
+        <label>Board IMU <select id="board"><option value="1">IMU1</option><option value="2">IMU2</option><option value="3">IMU3</option></select></label>
+      </div>
+      <div class="row">
+        <input id="name1" size="8" value="board" aria-label="IMU1 name">
+        <input id="name2" size="8" value="platform" aria-label="IMU2 name">
+        <input id="name3" size="8" value="shank" aria-label="IMU3 name">
+      </div>
+      <div class="row">
+        <label>Subject <input id="subject" size="6" value="S01"></label>
+        <label>Range ±<input id="yrange" type="number" size="3" value="20" min="2" max="90" style="width:58px">°</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Recovery — board roll</h2>
+      <canvas id="bars" style="height:150px"></canvas>
+      <div class="muted" id="asym" style="margin:6px 0 8px">No perturbations yet.</div>
+      <div class="tablewrap">
+        <table><thead><tr><th>#</th><th>dir</th><th>peak °</th><th>TTS s</th></tr></thead><tbody id="events"></tbody></table>
+      </div>
+      <div class="row" style="margin-top:8px"><button id="clearEvents">Clear</button></div>
+      <div class="muted">Stable = |tilt − baseline| &lt; 2° and |rate| &lt; 10°/s held 0.5 s, within 3 s of onset. Direction from the sign of the roll excursion.</div>
+    </div>
+
+    <div class="card">
+      <h2>Device log</h2>
+      <div id="log"></div>
+    </div>
+  </aside>
+</main>
+
+<script>
+"use strict";
+// ---------------- config ----------------
+const WINDOW_S = 10, ALPHA = 0.98, MAX_BUF = 4000;
+const STABLE_TILT = 2.0, STABLE_RATE = 10.0, STABLE_HOLD = 0.5, ANALYSIS = 3.0, BASELINE = 0.5;
+const COLS = [];
+for (const i of [1, 2, 3]) for (const c of ["ax", "ay", "az", "gyro_x", "gyro_y", "gyro_z"]) COLS.push(`imu${i}_${c}`);
+
+// ---------------- state ----------------
+let port = null, reader = null, keepReading = false;
+let label = 0, recording = false, recRows = [], recStart = null;
+let bias = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], tare = [[0, 0], [0, 0], [0, 0]];
+let calibrating = null;
+let dropped = 0, rateCount = 0, rateT = performance.now(), rate = 0;
+const filt = [null, null, null].map(() => ({ roll: null, pitch: null }));
+let lastT = null;
+const buf = { t: [], label: [], roll: [[], [], []], pitch: [[], [], []], gx: [[], [], []] };
+const events = [];       // completed metrics
+const pending = [];      // onsets awaiting 3 s of data
+
+const $ = id => document.getElementById(id);
+let cssCache = {};
+const css = n => (n in cssCache) ? cssCache[n] : (cssCache[n] = getComputedStyle(document.documentElement).getPropertyValue(n).trim());
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { cssCache = {}; drawBars(); });
+
+// ---------------- plots ----------------
+const plotsEl = $("plots"), canvases = [], heads = [];
+for (let i = 0; i < 3; i++) {
+  const wrap = document.createElement("div");
+  wrap.innerHTML = `<div class="plot-head"><b id="title${i}"></b><span id="val${i}"></span></div><canvas id="c${i}"></canvas>`;
+  plotsEl.appendChild(wrap);
+  canvases.push(wrap.querySelector("canvas"));
+}
+function names() { return [1, 2, 3].map(i => $("name" + i).value || "imu" + i); }
+function boardIdx() { return parseInt($("board").value, 10) - 1; }
+function refreshTitles() {
+  const n = names(), b = boardIdx();
+  for (let i = 0; i < 3; i++) $("title" + i).textContent = `IMU${i + 1} · ${n[i]}${i === b && n[i] !== "board" ? " (board)" : ""}`;
+}
+["name1", "name2", "name3", "board"].forEach(id => $(id).addEventListener("input", refreshTitles));
+refreshTitles();
+
+function fitCanvas(c) {
+  const r = c.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(r.width * d) || c.height !== Math.round(r.height * d)) {
+    c.width = Math.round(r.width * d); c.height = Math.round(r.height * d);
+  }
+  const ctx = c.getContext("2d"); ctx.setTransform(d, 0, 0, d, 0, 0);
+  return [ctx, r.width, r.height];
+}
+
+function drawPlot(i) {
+  const [ctx, W, H] = fitCanvas(canvases[i]);
+  ctx.clearRect(0, 0, W, H);
+  const L = 38, R = 6, T = 6, B = 18, pw = W - L - R, ph = H - T - B;
+  const yr = Math.max(2, parseFloat($("yrange").value) || 20);
+  const t = buf.t, n = t.length;
+  const tEnd = n ? t[n - 1] : WINDOW_S, tStart = tEnd - WINDOW_S;
+  const X = v => L + (v - tStart) / WINDOW_S * pw, Y = v => T + ph / 2 - v / yr * ph / 2;
+
+  // label shading
+  const labCol = { 1: css("--lab1"), 2: css("--lab2"), 3: css("--lab3") };
+  let s = 0;
+  while (s < n && t[s] < tStart) s++;
+  for (let k = s; k < n;) {
+    let e = k; while (e + 1 < n && buf.label[e + 1] === buf.label[k]) e++;
+    if (labCol[buf.label[k]]) { ctx.fillStyle = labCol[buf.label[k]]; ctx.fillRect(X(t[k]), T, Math.max(1, X(t[e]) - X(t[k])), ph); }
+    k = e + 1;
+  }
+  // grid
+  ctx.strokeStyle = css("--line"); ctx.fillStyle = css("--muted"); ctx.lineWidth = 1;
+  ctx.font = "11px system-ui, sans-serif"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const g of [-yr, -yr / 2, 0, yr / 2, yr]) {
+    ctx.beginPath(); ctx.moveTo(L, Y(g)); ctx.lineTo(W - R, Y(g)); ctx.stroke();
+    ctx.fillText((Math.round(g * 10) / 10) + "°", L - 4, Y(g));
+  }
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let g = Math.ceil(tStart); g <= tEnd; g += 2) ctx.fillText(g.toFixed(0) + "s", X(g), T + ph + 3);
+  // onsets
+  ctx.strokeStyle = css("--onset"); ctx.setLineDash([4, 3]);
+  for (let k = Math.max(s, 1); k < n; k++) if (buf.label[k] === 2 && buf.label[k - 1] !== 2) {
+    ctx.beginPath(); ctx.moveTo(X(t[k]), T); ctx.lineTo(X(t[k]), T + ph); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  // traces
+  ctx.save(); ctx.beginPath(); ctx.rect(L, T, pw, ph); ctx.clip();
+  for (const [arr, col] of [[buf.roll[i], css("--roll")], [buf.pitch[i], css("--pitch")]]) {
+    ctx.strokeStyle = col; ctx.lineWidth = 1.6; ctx.beginPath(); let pen = false;
+    for (let k = s; k < n; k++) {
+      const v = arr[k];
+      if (!Number.isFinite(v)) { pen = false; continue; }
+      if (pen) ctx.lineTo(X(t[k]), Y(v)); else { ctx.moveTo(X(t[k]), Y(v)); pen = true; }
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+  if (n) {
+    const r = buf.roll[i][n - 1], p = buf.pitch[i][n - 1];
+    $("val" + i).textContent = Number.isFinite(r) ? `roll ${r >= 0 ? "+" : ""}${r.toFixed(1)}°  pitch ${p >= 0 ? "+" : ""}${p.toFixed(1)}°` : "no data";
+  }
+}
+
+function drawBars() {
+  const c = $("bars"), [ctx, W, H] = fitCanvas(c);
+  ctx.clearRect(0, 0, W, H);
+  const groups = ["left", "right"].map(d => {
+    const e = events.filter(x => x.dir === d && Number.isFinite(x.tts));
+    const m = e.length ? e.reduce((a, x) => a + x.tts, 0) / e.length : NaN;
+    const sd = e.length > 1 ? Math.sqrt(e.reduce((a, x) => a + (x.tts - m) ** 2, 0) / (e.length - 1)) : 0;
+    return { d, n: e.length, m, sd };
+  });
+  const maxV = Math.max(1, ...groups.map(g => (Number.isFinite(g.m) ? g.m + g.sd : 0))) * 1.15;
+  const L = 48, B = 20, T = 8, ph = H - B - T, bw = (W - L) / 2;
+  ctx.strokeStyle = css("--line"); ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui, sans-serif";
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (let g = 0; g <= maxV; g += maxV > 3 ? 1 : 0.5) {
+    const y = T + ph - g / maxV * ph;
+    ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(W, y); ctx.stroke(); ctx.fillText(g.toFixed(1), L - 4, y);
+  }
+  groups.forEach((g, k) => {
+    const x0 = L + k * bw + bw * 0.22, w = bw * 0.56;
+    ctx.fillStyle = css(k ? "--right" : "--left");
+    if (Number.isFinite(g.m)) {
+      const h = g.m / maxV * ph; ctx.fillRect(x0, T + ph - h, w, h);
+      ctx.strokeStyle = css("--ink"); ctx.beginPath();
+      const yt = T + ph - (g.m + g.sd) / maxV * ph, yb = T + ph - Math.max(0, g.m - g.sd) / maxV * ph, xc = x0 + w / 2;
+      ctx.moveTo(xc, yt); ctx.lineTo(xc, yb); ctx.moveTo(xc - 6, yt); ctx.lineTo(xc + 6, yt); ctx.moveTo(xc - 6, yb); ctx.lineTo(xc + 6, yb); ctx.stroke();
+    }
+    ctx.fillStyle = css("--ink"); ctx.textAlign = "center"; ctx.textBaseline = "top";
+    ctx.fillText(`${g.d} (n=${g.n})`, x0 + w / 2, T + ph + 4);
+  });
+  ctx.save(); ctx.translate(10, T + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillStyle = css("--muted");
+  ctx.fillText("TTS (s)", 0, 0); ctx.restore();
+  const [l, r] = groups;
+  $("asym").textContent = events.length === 0 ? "No perturbations yet." :
+    (Number.isFinite(l.m) && Number.isFinite(r.m) && l.m + r.m > 0)
+      ? `Left ${l.m.toFixed(2)} s vs right ${r.m.toFixed(2)} s · asymmetry ${(100 * (l.m - r.m) / ((l.m + r.m) / 2)).toFixed(0)}% (+ = left slower)`
+      : `${events.length} perturbation(s) analysed`;
+}
+
+// ---------------- data handling ----------------
+function logLine(s) { const el = $("log"); el.textContent += s + "\n"; el.scrollTop = el.scrollHeight; }
+
+function ingest(line) {
+  if (line.startsWith("#")) { logLine(line); return; }
+  const p = line.split(",");
+  if (p.length !== 19) { dropped++; return; }
+  const tms = parseFloat(p[0]);
+  const v = p.slice(1).map(x => parseFloat(x));   // "nan" -> NaN
+  if (!Number.isFinite(tms)) { dropped++; return; }
+  rateCount++;
+
+  if (recording) {
+    recRows.push([new Date().toISOString(), Math.round(tms), label, ...v.map(x => Number.isFinite(x) ? x.toFixed(4) : "")].join(","));
+  }
+  if (calibrating) {
+    for (let i = 0; i < 3; i++) {
+      const g = v.slice(i * 6 + 3, i * 6 + 6);
+      if (g.every(Number.isFinite)) { calibrating.sum[i] = calibrating.sum[i].map((a, k) => a + g[k]); calibrating.n[i]++; }
+    }
+  }
+
+  const t = tms / 1000;
+  const dt = lastT === null ? 0 : t - lastT;
+  lastT = t;
+  buf.t.push(t); buf.label.push(label);
+  for (let i = 0; i < 3; i++) {
+    const [ax, ay, az, gx0, gy0] = v.slice(i * 6, i * 6 + 5);
+    const gx = gx0 - bias[i][0], gy = gy0 - bias[i][1];
+    const f = filt[i];
+    if ([ax, ay, az, gx, gy].every(Number.isFinite)) {
+      const rA = Math.atan2(ay, az) * 180 / Math.PI, pA = Math.atan2(-ax, Math.hypot(ay, az)) * 180 / Math.PI;
+      if (f.roll === null || dt <= 0 || dt > 0.5) { f.roll = rA; f.pitch = pA; }
+      else { f.roll = ALPHA * (f.roll + gx * dt) + (1 - ALPHA) * rA; f.pitch = ALPHA * (f.pitch + gy * dt) + (1 - ALPHA) * pA; }
+    }
+    buf.roll[i].push(f.roll === null ? NaN : f.roll - tare[i][0]);
+    buf.pitch[i].push(f.pitch === null ? NaN : f.pitch - tare[i][1]);
+    buf.gx[i].push(Number.isFinite(gx) ? gx : NaN);
+  }
+  const n = buf.t.length;
+  if (n > 1 && buf.label[n - 1] === 2 && buf.label[n - 2] !== 2) pending.push(t);
+  if (n > MAX_BUF) {
+    const cut = n - MAX_BUF;
+    buf.t.splice(0, cut); buf.label.splice(0, cut);
+    for (let i = 0; i < 3; i++) { buf.roll[i].splice(0, cut); buf.pitch[i].splice(0, cut); buf.gx[i].splice(0, cut); }
+  }
+  while (pending.length && t >= pending[0] + ANALYSIS) analyse(pending.shift());
+}
+
+function analyse(t0) {
+  const b = boardIdx(), t = buf.t;
+  const pre = [], post = [];
+  for (let k = 0; k < t.length; k++) {
+    if (t[k] >= t0 - BASELINE && t[k] < t0) pre.push(k);
+    else if (t[k] >= t0 && t[k] <= t0 + ANALYSIS) post.push(k);
+  }
+  if (post.length < 10) return;
+  const roll = buf.roll[b];
+  const preVals = pre.map(k => roll[k]).filter(Number.isFinite);
+  const base = preVals.length ? preVals.reduce((a, x) => a + x, 0) / preVals.length : roll[post[0]];
+  let peak = 0;
+  for (const k of post) { const d = roll[k] - base; if (Number.isFinite(d) && Math.abs(d) > Math.abs(peak)) peak = d; }
+  // 50 ms moving average on the rate, as in visualize.py
+  const rateS = post.map((k, j) => {
+    let s = 0, c = 0;
+    for (let q = Math.max(0, j - 2); q <= Math.min(post.length - 1, j + 2); q++) { const g = buf.gx[b][post[q]]; if (Number.isFinite(g)) { s += g; c++; } }
+    return c ? s / c : NaN;
+  });
+  const dtMed = (t[post[post.length - 1]] - t[post[0]]) / (post.length - 1);
+  const hold = Math.max(1, Math.round(STABLE_HOLD / dtMed));
+  let run = 0, tts = NaN;
+  for (let j = 0; j < post.length; j++) {
+    const ok = Math.abs(roll[post[j]] - base) < STABLE_TILT && Math.abs(rateS[j]) < STABLE_RATE;
+    run = ok ? run + 1 : 0;
+    if (run >= hold) { tts = t[post[j - hold + 1]] - t[post[0]]; break; }
+  }
+  const ev = { n: events.length + 1, dir: peak < 0 ? "left" : "right", peak, tts };
+  events.push(ev);
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${ev.n}</td><td>${ev.dir}</td><td>${ev.peak.toFixed(1)}</td><td>${Number.isFinite(ev.tts) ? ev.tts.toFixed(2) : "> 3"}</td>`;
+  $("events").prepend(tr);
+  drawBars();
+}
+
+// ---------------- serial ----------------
+async function connect() {
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: parseInt($("baud").value, 10), bufferSize: 1 << 16 });
+  } catch (e) { logLine("Connect failed: " + e.message); port = null; return; }
+  $("conn").textContent = "Connected"; $("dot").className = "dot on";
+  ["disconnect", "calib", "tare", "record"].forEach(id => $(id).disabled = false);
+  $("connect").disabled = true;
+  lastT = null; filt.forEach(f => { f.roll = null; f.pitch = null; });
+  keepReading = true;
+  readLoop();
+}
+
+async function readLoop() {
+  const decoder = new TextDecoder();
+  let partial = "";
+  while (port && port.readable && keepReading) {
+    reader = port.readable.getReader();
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) { keepReading = false; break; }
+        partial += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = partial.indexOf("\n")) >= 0) {
+          const line = partial.slice(0, nl).trim();
+          partial = partial.slice(nl + 1);
+          if (line) ingest(line);
+        }
+      }
+    } catch (e) { logLine("Read error: " + e.message); }
+    finally { reader.releaseLock(); }
+  }
+  if (port) { logLine("Serial stream ended."); disconnect(); }
+}
+
+async function disconnect() {
+  keepReading = false;
+  try { if (reader) await reader.cancel(); } catch (e) {}
+  try { if (port) await port.close(); } catch (e) {}
+  port = null;
+  $("conn").textContent = "Not connected"; $("dot").className = "dot";
+  ["disconnect", "calib", "tare", "record"].forEach(id => $(id).disabled = true);
+  $("connect").disabled = false;
+  if (recording) stopRecording();
+}
+
+// ---------------- controls ----------------
+function setLabel(l) {
+  label = l;
+  document.querySelectorAll("[data-label]").forEach(b => b.classList.toggle("active", +b.dataset.label === l));
+}
+document.querySelectorAll("[data-label]").forEach(b => b.addEventListener("click", () => setLabel(+b.dataset.label)));
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key >= "0" && e.key <= "3") setLabel(+e.key);
+});
+setLabel(0);
+
+$("calib").addEventListener("click", () => {
+  calibrating = { sum: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], n: [0, 0, 0] };
+  $("calib").disabled = true; logLine("Calibrating gyro bias - keep all IMUs still...");
+  setTimeout(() => {
+    const c = calibrating; calibrating = null; $("calib").disabled = !port;
+    for (let i = 0; i < 3; i++) if (c.n[i]) bias[i] = c.sum[i].map(s => s / c.n[i]);
+    logLine("Gyro bias (deg/s): " + bias.map((b, i) => `IMU${i + 1} ${b.map(x => x.toFixed(2)).join("/")}`).join("  "));
+  }, 2000);
+});
+$("tare").addEventListener("click", () => {
+  for (let i = 0; i < 3; i++) if (filt[i].roll !== null) tare[i] = [filt[i].roll, filt[i].pitch];
+  logLine("Tilt zeroed at current pose.");
+});
+$("clearEvents").addEventListener("click", () => { events.length = 0; $("events").innerHTML = ""; drawBars(); });
+
+function stopRecording() {
+  recording = false;
+  $("record").textContent = "Start recording"; $("dot").className = port ? "dot on" : "dot"; $("recinfo").textContent = "";
+  if (!recRows.length) return;
+  const stamp = recStart.toISOString().slice(0, 19).replace(/[-:T]/g, "").replace(/(\d{8})(\d{6})/, "$1_$2");
+  const stem = `${stamp}_${$("subject").value || "S"}_web`;
+  const header = ["pc_time", "t_ms", "label", ...COLS].join(",");
+  download(stem + ".csv", header + "\n" + recRows.join("\n") + "\n", "text/csv");
+  const n = names();
+  const meta = {
+    subject: $("subject").value, condition: "web", trial: 1, start_time: recStart.toISOString(),
+    source: "web serial page", target_sample_rate_hz: 100, accel_range_g: 4, gyro_range_dps: 500,
+    segment_map: { imu1: n[0], imu2: n[1], imu3: n[2] },
+    gyro_bias: Object.fromEntries(bias.map((b, i) => [`imu${i + 1}`, { gyro_x: b[0], gyro_y: b[1], gyro_z: b[2] }])),
+    total_samples: recRows.length, csv_file: stem + ".csv",
+  };
+  download(stem + "_meta.json", JSON.stringify(meta, null, 2), "application/json");
+  recRows = [];
+}
+function download(name, text, type) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$("record").addEventListener("click", () => {
+  if (!recording) {
+    recording = true; recRows = []; recStart = new Date();
+    $("record").textContent = "Stop & download"; $("dot").className = "dot rec";
+  } else stopRecording();
+});
+$("connect").addEventListener("click", connect);
+$("disconnect").addEventListener("click", disconnect);
+
+if (!("serial" in navigator)) { $("unsupported").style.display = "block"; $("connect").disabled = true; }
+
+// ---------------- render loop ----------------
+function frame() {
+  const now = performance.now();
+  if (now - rateT >= 1000) { rate = rateCount * 1000 / (now - rateT); rateCount = 0; rateT = now; }
+  $("rate").textContent = `${rate.toFixed(0)} Hz`;
+  $("dropped").textContent = `dropped ${dropped}`;
+  if (recording) $("recinfo").textContent = `REC ${recRows.length} samples`;
+  for (let i = 0; i < 3; i++) drawPlot(i);
+  requestAnimationFrame(frame);
+}
+drawBars();
+requestAnimationFrame(frame);
+window.addEventListener("resize", drawBars);
+</script>
+</body>
+</html>
